@@ -1,0 +1,653 @@
+<link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=VT323&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+
+<style>
+  :root{
+    --bg:#0a0c10;
+    --screen:#081410;
+    --green:#39ff14;
+    --green-dim:#1f8a10;
+    --amber:#ffb000;
+    --cyan:#33e0ff;
+    --red:#ff2e4d;
+    --panel:#11161c;
+    --border:#233028;
+  }
+  *{ box-sizing:border-box; }
+  #app{
+    min-height:100vh;
+    width:100%;
+    background:
+      radial-gradient(ellipse at top, #10201a 0%, var(--bg) 60%);
+    color:var(--green);
+    font-family:'VT323', monospace;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    padding:24px 16px;
+    overflow-x:hidden;
+  }
+  .pixel{ font-family:'Press Start 2P', monospace; }
+  .hidden{ display:none !important; }
+
+  /* ---------- HOST VIEW ---------- */
+  #host-view{
+    display:flex;
+    gap:28px;
+    flex-wrap:wrap;
+    align-items:flex-start;
+    justify-content:center;
+    max-width:920px;
+    width:100%;
+  }
+  .marquee{
+    width:100%;
+    text-align:center;
+    font-size:20px;
+    letter-spacing:2px;
+    color:var(--green);
+    text-shadow:0 0 8px var(--green), 0 0 22px rgba(57,255,20,.5);
+    margin-bottom:4px;
+  }
+  .cabinet{
+    position:relative;
+    background:var(--screen);
+    border:4px solid var(--border);
+    border-radius:10px;
+    box-shadow:
+      0 0 0 4px #05100a,
+      0 0 30px rgba(57,255,20,.15) inset,
+      0 20px 40px rgba(0,0,0,.5);
+    padding:14px;
+  }
+  .screen-wrap{
+    position:relative;
+    width:400px;
+    max-width:80vw;
+    aspect-ratio:1/1;
+    overflow:hidden;
+    border-radius:4px;
+  }
+  #gameCanvas{
+    width:100%;
+    height:100%;
+    display:block;
+    background:#04100a;
+  }
+  .scanlines{
+    position:absolute; inset:0;
+    pointer-events:none;
+    background:repeating-linear-gradient(
+      to bottom, rgba(0,0,0,0) 0px, rgba(0,0,0,0) 2px, rgba(0,0,0,.18) 3px
+    );
+    mix-blend-mode:multiply;
+  }
+  .crt-flicker{
+    position:absolute; inset:0;
+    pointer-events:none;
+    background:rgba(57,255,20,.02);
+    animation:flicker 5s infinite;
+  }
+  @keyframes flicker{
+    0%,100%{ opacity:1; } 92%{ opacity:1; } 93%{ opacity:.85; } 94%{ opacity:1; }
+  }
+  .hud{
+    display:flex;
+    justify-content:space-between;
+    align-items:center;
+    padding:0 4px 10px;
+    font-size:14px;
+    letter-spacing:1px;
+    color:var(--amber);
+  }
+  .overlay{
+    position:absolute; inset:0;
+    display:flex; flex-direction:column;
+    align-items:center; justify-content:center;
+    gap:14px;
+    background:rgba(4,16,10,.88);
+    text-align:center;
+    padding:20px;
+  }
+  .overlay .big{ font-size:16px; color:var(--green); text-shadow:0 0 10px var(--green); }
+  .overlay .small{ font-size:20px; color:var(--cyan); max-width:280px; line-height:1.4; }
+  .blink{ animation:blink 1.1s steps(1) infinite; }
+  @keyframes blink{ 50%{ opacity:0; } }
+
+  .deck{
+    background:var(--panel);
+    border:3px solid var(--border);
+    border-radius:10px;
+    padding:20px;
+    width:260px;
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    gap:14px;
+    box-shadow:0 20px 40px rgba(0,0,0,.5);
+  }
+  .deck h2{
+    font-family:'Press Start 2P', monospace;
+    font-size:12px;
+    color:var(--amber);
+    margin:0;
+    text-align:center;
+    line-height:1.6;
+  }
+  .cartridge{
+    background:#fff;
+    padding:10px;
+    border-radius:6px;
+    border:3px solid var(--green-dim);
+    box-shadow:0 0 18px rgba(57,255,20,.35);
+  }
+  #qrcode{ width:176px; height:176px; }
+  .session-code{
+    font-size:22px;
+    letter-spacing:4px;
+    color:var(--cyan);
+  }
+  .led-row{
+    display:flex; align-items:center; gap:8px;
+    font-size:16px;
+    color:#8fa89a;
+  }
+  .led{
+    width:12px; height:12px; border-radius:50%;
+    background:var(--red);
+    box-shadow:0 0 8px var(--red);
+    transition:all .2s;
+  }
+  .led.on{
+    background:var(--green);
+    box-shadow:0 0 10px var(--green);
+  }
+  .deck p.hint{
+    font-size:15px;
+    color:#7fa08d;
+    text-align:center;
+    line-height:1.4;
+    margin:0;
+  }
+  button.retro{
+    font-family:'Press Start 2P', monospace;
+    font-size:10px;
+    padding:12px 16px;
+    background:var(--green);
+    color:#04120a;
+    border:none;
+    border-radius:4px;
+    cursor:pointer;
+    box-shadow:0 0 14px rgba(57,255,20,.5);
+  }
+  button.retro:active{ transform:translateY(1px); }
+
+  /* ---------- CONTROLLER VIEW ---------- */
+  #controller-view{
+    width:100%;
+    max-width:420px;
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    gap:18px;
+    padding-bottom:env(safe-area-inset-bottom, 10px);
+  }
+  .ctrl-header{
+    width:100%;
+    display:flex;
+    justify-content:space-between;
+    align-items:center;
+    font-size:16px;
+    color:#8fa89a;
+  }
+  .ctrl-score{
+    font-family:'Press Start 2P', monospace;
+    font-size:16px;
+    color:var(--amber);
+    text-shadow:0 0 8px var(--amber);
+  }
+  .join-box{
+    width:100%;
+    background:var(--panel);
+    border:3px solid var(--border);
+    border-radius:10px;
+    padding:22px;
+    display:flex;
+    flex-direction:column;
+    gap:14px;
+    align-items:center;
+    text-align:center;
+  }
+  .join-box input{
+    font-family:'Press Start 2P', monospace;
+    font-size:18px;
+    letter-spacing:4px;
+    text-align:center;
+    text-transform:uppercase;
+    background:#04120a;
+    color:var(--green);
+    border:2px solid var(--green-dim);
+    border-radius:6px;
+    padding:12px;
+    width:100%;
+  }
+  .dpad{
+    position:relative;
+    width:280px;
+    height:280px;
+    max-width:78vw;
+    max-height:78vw;
+    margin-top:10px;
+  }
+  .dbtn{
+    position:absolute;
+    width:33%;
+    height:33%;
+    background:linear-gradient(180deg, #16241c, #0c1712);
+    border:2px solid var(--green-dim);
+    color:var(--green);
+    font-size:28px;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    border-radius:12px;
+    user-select:none;
+    -webkit-user-select:none;
+    touch-action:manipulation;
+    box-shadow:0 4px 0 #05100a, 0 0 12px rgba(57,255,20,.15) inset;
+  }
+  .dbtn:active{
+    background:var(--green);
+    color:#04120a;
+    box-shadow:0 1px 0 #05100a, 0 0 18px var(--green);
+    transform:translateY(3px);
+  }
+  .dbtn.up{ top:0; left:33%; }
+  .dbtn.left{ top:33%; left:0; }
+  .dbtn.center{ top:33%; left:33%; background:#0a120e; border-color:#1a2620; }
+  .dbtn.right{ top:33%; left:66%; }
+  .dbtn.down{ top:66%; left:33%; }
+
+  .ctrl-status{
+    font-size:15px;
+    color:#7fa08d;
+    text-align:center;
+  }
+</style>
+
+<div id="app">
+
+  <!-- ================= HOST VIEW ================= -->
+  <div id="host-view">
+    <div class="marquee pixel">SNAKE // MOBILE JOYSTICK</div>
+
+    <div class="cabinet">
+      <div class="hud">
+        <span>SCORE <span id="scoreHost">0</span></span>
+        <span>BEST <span id="bestHost">0</span></span>
+      </div>
+      <div class="screen-wrap">
+        <canvas id="gameCanvas" width="400" height="400"></canvas>
+        <div class="scanlines"></div>
+        <div class="crt-flicker"></div>
+        <div class="overlay" id="waitingOverlay">
+          <div class="big pixel">SCAN QR<br>WITH PHONE</div>
+          <div class="small">ต่อมือถือเป็นจอยสติ๊ก แล้วเกมจะเริ่มอัตโนมัติ</div>
+        </div>
+        <div class="overlay hidden" id="countdownOverlay">
+          <div class="big pixel" id="countdownText">3</div>
+        </div>
+        <div class="overlay hidden" id="gameoverOverlay">
+          <div class="big pixel">GAME OVER</div>
+          <div class="small" id="finalScoreText">Score: 0</div>
+          <button class="retro" id="restartBtn">NEW GAME</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="deck">
+      <h2>连接手机<br>SCAN TO CONNECT</h2>
+      <div class="cartridge">
+        <div id="qrcode"></div>
+      </div>
+      <div class="session-code pixel" id="sessionCodeText">------</div>
+      <div class="led-row">
+        <div class="led" id="connLed"></div>
+        <span id="connText">waiting for controller...</span>
+      </div>
+      <p class="hint">เปิดกล้องมือถือแล้วสแกน QR นี้<br>(ต้อง Publish artifact นี้ก่อน<br>เพื่อให้มือถือเปิดลิงก์ได้จริง)</p>
+    </div>
+  </div>
+
+  <!-- ================= CONTROLLER VIEW ================= -->
+  <div id="controller-view" class="hidden">
+    <div class="ctrl-header">
+      <div class="led-row"><div class="led" id="ctrlLed"></div><span id="ctrlLedText">connecting...</span></div>
+      <div class="ctrl-score">SCORE <span id="scoreCtrl">0</span></div>
+    </div>
+
+    <div class="join-box" id="joinBox">
+      <div class="pixel" style="font-size:12px;color:var(--amber);">ENTER SESSION CODE</div>
+      <input id="sessionInput" maxlength="6" placeholder="XXXXXX">
+      <button class="retro" id="joinBtn">CONNECT</button>
+    </div>
+
+    <div class="dpad hidden" id="dpad">
+      <div class="dbtn up" data-dir="up">▲</div>
+      <div class="dbtn left" data-dir="left">◀</div>
+      <div class="dbtn center"></div>
+      <div class="dbtn right" data-dir="right">▶</div>
+      <div class="dbtn down" data-dir="down">▼</div>
+    </div>
+
+    <div class="ctrl-status" id="ctrlStatus">เชื่อมต่อแล้ว แตะปุ่มลูกศรเพื่อบังคับทิศทาง</div>
+  </div>
+
+</div>
+
+<script>
+(function(){
+  // ---------- shared storage helpers ----------
+  async function storSet(key, val){
+    try{
+      const r = await window.storage.set(key, JSON.stringify(val), true);
+      return r;
+    }catch(e){ console.error('storage set failed', e); return null; }
+  }
+  async function storGet(key){
+    try{
+      const r = await window.storage.get(key, true);
+      if(!r) return null;
+      return JSON.parse(r.value);
+    }catch(e){ return null; }
+  }
+
+  const params = new URLSearchParams(window.location.search);
+  const role = params.get('role');
+
+  // ================= AUDIO =================
+  let actx = null;
+  function ensureAudio(){
+    if(!actx){
+      try{ actx = new (window.AudioContext || window.webkitAudioContext)(); }catch(e){}
+    } else if(actx.state === 'suspended'){
+      actx.resume();
+    }
+  }
+  function beep(freq, dur, type, vol){
+    if(!actx) return;
+    const t0 = actx.currentTime;
+    const osc = actx.createOscillator();
+    const gain = actx.createGain();
+    osc.type = type || 'square';
+    osc.frequency.setValueAtTime(freq, t0);
+    gain.gain.setValueAtTime((vol!==undefined?vol:0.15), t0);
+    gain.gain.exponentialRampToValueAtTime(0.001, t0 + dur);
+    osc.connect(gain).connect(actx.destination);
+    osc.start(t0);
+    osc.stop(t0 + dur);
+  }
+  function sfxEat(){ beep(880,0.09,'square',0.12); setTimeout(()=>beep(1320,0.09,'square',0.1),70); }
+  function sfxTurn(){ beep(220,0.03,'square',0.04); }
+  function sfxGameOver(){
+    beep(300,0.15,'sawtooth',0.12);
+    setTimeout(()=>beep(220,0.15,'sawtooth',0.12),140);
+    setTimeout(()=>beep(140,0.25,'sawtooth',0.12),280);
+  }
+
+  // ============================================================
+  // HOST MODE
+  // ============================================================
+  if(role !== 'controller'){
+    document.getElementById('controller-view').classList.add('hidden');
+    document.addEventListener('click', ensureAudio, {once:true});
+    document.addEventListener('touchstart', ensureAudio, {once:true});
+
+    function genSession(){
+      const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+      let s = '';
+      for(let i=0;i<6;i++) s += chars[Math.floor(Math.random()*chars.length)];
+      return s;
+    }
+    const session = genSession();
+    document.getElementById('sessionCodeText').textContent = session;
+
+    const controllerUrl = window.location.origin + window.location.pathname + '?session=' + session + '&role=controller';
+    new QRCode(document.getElementById('qrcode'), {
+      text: controllerUrl,
+      width: 176,
+      height: 176,
+      colorDark: '#08130d',
+      colorLight: '#ffffff',
+      correctLevel: QRCode.CorrectLevel.M
+    });
+
+    const inputKey = 'snake:' + session + ':input';
+    const statusKey = 'snake:' + session + ':status';
+
+    // ---- game state ----
+    const COLS = 20, ROWS = 20;
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    const cell = canvas.width / COLS;
+
+    let snake, dir, pendingDir, food, score, best = 0, alive = false, started = false;
+    let lastInputTs = 0;
+    let connected = false;
+
+    function resetGame(){
+      snake = [{x:10,y:10},{x:9,y:10},{x:8,y:10}];
+      dir = {x:1,y:0};
+      pendingDir = null;
+      score = 0;
+      alive = true;
+      placeFood();
+      document.getElementById('scoreHost').textContent = score;
+    }
+    function placeFood(){
+      let ok = false, fx, fy;
+      while(!ok){
+        fx = Math.floor(Math.random()*COLS);
+        fy = Math.floor(Math.random()*ROWS);
+        ok = !snake.some(s=>s.x===fx && s.y===fy);
+      }
+      food = {x:fx, y:fy};
+    }
+    function draw(){
+      ctx.fillStyle = '#04100a';
+      ctx.fillRect(0,0,canvas.width,canvas.height);
+      // faint grid
+      ctx.strokeStyle = 'rgba(57,255,20,0.06)';
+      for(let i=1;i<COLS;i++){
+        ctx.beginPath(); ctx.moveTo(i*cell,0); ctx.lineTo(i*cell,canvas.height); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(0,i*cell); ctx.lineTo(canvas.width,i*cell); ctx.stroke();
+      }
+      // food
+      ctx.fillStyle = '#ffb000';
+      ctx.shadowColor = '#ffb000'; ctx.shadowBlur = 10;
+      ctx.fillRect(food.x*cell+3, food.y*cell+3, cell-6, cell-6);
+      ctx.shadowBlur = 0;
+      // snake
+      snake.forEach((s,i)=>{
+        ctx.fillStyle = i===0 ? '#7dffcf' : '#39ff14';
+        ctx.shadowColor = '#39ff14'; ctx.shadowBlur = i===0 ? 12 : 4;
+        ctx.fillRect(s.x*cell+1, s.y*cell+1, cell-2, cell-2);
+      });
+      ctx.shadowBlur = 0;
+    }
+
+    async function pollInput(){
+      const data = await storGet(inputKey);
+      if(data && data.ts){
+        if(data.ts > lastInputTs){
+          lastInputTs = data.ts;
+          if(!connected){
+            connected = true;
+            document.getElementById('connLed').classList.add('on');
+            document.getElementById('connText').textContent = 'controller connected';
+          }
+          if(data.dir && alive){
+            const nd = data.dir;
+            if(nd === 'up' && dir.y !== 1) pendingDir = {x:0,y:-1};
+            else if(nd === 'down' && dir.y !== -1) pendingDir = {x:0,y:1};
+            else if(nd === 'left' && dir.x !== 1) pendingDir = {x:-1,y:0};
+            else if(nd === 'right' && dir.x !== -1) pendingDir = {x:1,y:0};
+          }
+        }
+      }
+      // consider disconnected if no ping for 6s
+      if(connected && Date.now() - lastInputTs > 6000){
+        connected = false;
+        document.getElementById('connLed').classList.remove('on');
+        document.getElementById('connText').textContent = 'controller disconnected';
+      }
+    }
+    function dirName(d){
+      if(d.y===-1) return 'up'; if(d.y===1) return 'down';
+      if(d.x===-1) return 'left'; return 'right';
+    }
+
+    function tickGame(){
+      if(!alive) return;
+      if(pendingDir){ dir = pendingDir; pendingDir = null; }
+      const head = {x: snake[0].x + dir.x, y: snake[0].y + dir.y};
+      if(head.x < 0 || head.x >= COLS || head.y < 0 || head.y >= ROWS || snake.some(s=>s.x===head.x && s.y===head.y)){
+        endGame();
+        return;
+      }
+      snake.unshift(head);
+      if(head.x === food.x && head.y === food.y){
+        score++;
+        best = Math.max(best, score);
+        document.getElementById('scoreHost').textContent = score;
+        document.getElementById('bestHost').textContent = best;
+        sfxEat();
+        placeFood();
+      } else {
+        snake.pop();
+      }
+      draw();
+      storSet(statusKey, {score, alive:true, ts:Date.now()});
+    }
+    function endGame(){
+      alive = false;
+      sfxGameOver();
+      document.getElementById('finalScoreText').textContent = 'Score: ' + score;
+      document.getElementById('gameoverOverlay').classList.remove('hidden');
+      storSet(statusKey, {score, alive:false, ts:Date.now()});
+    }
+
+    let countdownTimer = null;
+    function startCountdown(){
+      document.getElementById('waitingOverlay').classList.add('hidden');
+      const el = document.getElementById('countdownOverlay');
+      const txt = document.getElementById('countdownText');
+      el.classList.remove('hidden');
+      let n = 3;
+      txt.textContent = n;
+      beep(440,0.08,'square',0.1);
+      countdownTimer = setInterval(()=>{
+        n--;
+        if(n>0){ txt.textContent = n; beep(440,0.08,'square',0.1); }
+        else {
+          clearInterval(countdownTimer);
+          el.classList.add('hidden');
+          resetGame();
+          draw();
+          started = true;
+          runLoop();
+        }
+      },700);
+    }
+
+    let loopHandle = null;
+    function runLoop(){
+      if(loopHandle) clearInterval(loopHandle);
+      loopHandle = setInterval(tickGame, 160);
+    }
+
+    document.getElementById('restartBtn').addEventListener('click', ()=>{
+      ensureAudio();
+      document.getElementById('gameoverOverlay').classList.add('hidden');
+      resetGame();
+      draw();
+    });
+
+    // poll for connection + input constantly
+    setInterval(async ()=>{
+      await pollInput();
+      if(connected && !started){
+        startCountdown();
+      }
+    }, 200);
+
+    draw();
+  }
+
+  // ============================================================
+  // CONTROLLER MODE
+  // ============================================================
+  else {
+    document.getElementById('host-view').classList.add('hidden');
+    document.getElementById('controller-view').classList.remove('hidden');
+
+    let session = params.get('session') || '';
+    const joinBox = document.getElementById('joinBox');
+    const dpad = document.getElementById('dpad');
+    const sessionInput = document.getElementById('sessionInput');
+    const ctrlLed = document.getElementById('ctrlLed');
+    const ctrlLedText = document.getElementById('ctrlLedText');
+    const ctrlStatus = document.getElementById('ctrlStatus');
+    const scoreCtrl = document.getElementById('scoreCtrl');
+
+    function connect(sess){
+      session = sess.toUpperCase().trim();
+      if(session.length < 4) return;
+      const inputKey = 'snake:' + session + ':input';
+      const statusKey = 'snake:' + session + ':status';
+
+      joinBox.classList.add('hidden');
+      dpad.classList.remove('hidden');
+      ctrlLed.classList.add('on');
+      ctrlLedText.textContent = 'session ' + session;
+
+      // initial ping so host knows we exist
+      storSet(inputKey, {dir:null, ts:Date.now()});
+
+      // heartbeat so host doesn't think we disconnected
+      setInterval(()=>{
+        storSet(inputKey, {dir:lastDir, ts:Date.now()});
+      }, 2500);
+
+      // poll host status for score
+      setInterval(async ()=>{
+        const st = await storGet(statusKey);
+        if(st){
+          scoreCtrl.textContent = st.score;
+          ctrlStatus.textContent = st.alive ? 'เชื่อมต่อแล้ว บังคับทิศทางได้เลย' : 'จบเกม! รอเริ่มใหม่ที่จอหลัก';
+        }
+      }, 500);
+
+      let lastDir = null;
+      document.querySelectorAll('.dbtn[data-dir]').forEach(btn=>{
+        function press(){
+          const d = btn.getAttribute('data-dir');
+          lastDir = d;
+          storSet(inputKey, {dir:d, ts:Date.now()});
+          if(navigator.vibrate) navigator.vibrate(20);
+        }
+        btn.addEventListener('touchstart', (e)=>{ e.preventDefault(); press(); }, {passive:false});
+        btn.addEventListener('mousedown', press);
+      });
+    }
+
+    if(session){
+      connect(session);
+    } else {
+      document.getElementById('joinBtn').addEventListener('click', ()=>{
+        connect(sessionInput.value);
+      });
+    }
+  }
+})();
+</script>
