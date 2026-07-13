@@ -315,6 +315,7 @@
         <div class="led" id="connLed"></div>
         <span id="connText">waiting for controller...</span>
       </div>
+      <div style="font-size:12px;color:#4a6b5a;word-break:break-all;text-align:center;" id="debugLine"></div>
       <p class="hint">เปิดกล้องมือถือแล้วสแกน QR นี้<br>(ต้อง Publish artifact นี้ก่อน<br>เพื่อให้มือถือเปิดลิงก์ได้จริง)</p>
     </div>
   </div>
@@ -341,6 +342,7 @@
     </div>
 
     <div class="ctrl-status" id="ctrlStatus">เชื่อมต่อแล้ว แตะปุ่มลูกศรเพื่อบังคับทิศทาง</div>
+    <div style="font-size:11px;color:#4a6b5a;word-break:break-all;text-align:center;" id="ctrlDebug"></div>
   </div>
 
 </div>
@@ -348,18 +350,35 @@
 <script>
 (function(){
   // ---------- shared storage helpers ----------
+  let storageBroken = false;
+  let storageErrorMsg = '';
   async function storSet(key, val){
+    if(typeof window.storage === 'undefined'){
+      storageBroken = true; storageErrorMsg = 'window.storage API ไม่พบในหน้านี้';
+      return null;
+    }
     try{
       const r = await window.storage.set(key, JSON.stringify(val), true);
       return r;
-    }catch(e){ console.error('storage set failed', e); return null; }
+    }catch(e){
+      storageBroken = true; storageErrorMsg = 'set failed: ' + (e && e.message ? e.message : e);
+      console.error('storage set failed', e);
+      return null;
+    }
   }
   async function storGet(key){
+    if(typeof window.storage === 'undefined'){
+      storageBroken = true; storageErrorMsg = 'window.storage API ไม่พบในหน้านี้';
+      return null;
+    }
     try{
       const r = await window.storage.get(key, true);
       if(!r) return null;
       return JSON.parse(r.value);
-    }catch(e){ return null; }
+    }catch(e){
+      // "not found" throws too - only flag as broken if it's not a plain not-found
+      return null;
+    }
   }
 
   const params = new URLSearchParams(window.location.search);
@@ -438,6 +457,7 @@
     let score = 0, best = 0, alive = false, started = false;
     let lastInputTs = 0;
     let connected = false;
+    let pollCount = 0;
 
     function resetGame(){
       snake = [{x:10,y:10},{x:9,y:10},{x:8,y:10}];
@@ -481,7 +501,10 @@
     }
 
     async function pollInput(){
+      pollCount++;
       const data = await storGet(inputKey);
+      document.getElementById('debugLine').textContent =
+        'key: ' + inputKey + ' | polls: ' + pollCount + ' | last read: ' + (data ? JSON.stringify(data) : 'null');
       if(data && data.ts){
         if(data.ts > lastInputTs){
           lastInputTs = data.ts;
@@ -583,6 +606,9 @@
       if(connected && !started){
         startCountdown();
       }
+      if(storageBroken){
+        document.getElementById('connText').textContent = 'sync error: ' + storageErrorMsg;
+      }
     }, 200);
 
     draw();
@@ -614,9 +640,13 @@
       dpad.classList.remove('hidden');
       ctrlLed.classList.add('on');
       ctrlLedText.textContent = 'session ' + session;
+      const dbg = document.getElementById('ctrlDebug');
+      dbg.textContent = 'key: ' + inputKey;
 
       // initial ping so host knows we exist
-      storSet(inputKey, {dir:null, ts:Date.now()});
+      storSet(inputKey, {dir:null, ts:Date.now()}).then(r=>{
+        dbg.textContent = 'key: ' + inputKey + ' | initial ping result: ' + (r ? 'ok' : 'FAILED');
+      });
 
       // heartbeat so host doesn't think we disconnected
       setInterval(()=>{
@@ -625,6 +655,10 @@
 
       // poll host status for score
       setInterval(async ()=>{
+        if(storageBroken){
+          ctrlStatus.textContent = '⚠ ซิงค์ข้อมูลไม่ได้: ' + storageErrorMsg;
+          return;
+        }
         const st = await storGet(statusKey);
         if(st){
           scoreCtrl.textContent = st.score;
@@ -637,7 +671,9 @@
         function press(){
           const d = btn.getAttribute('data-dir');
           lastDir = d;
-          storSet(inputKey, {dir:d, ts:Date.now()});
+          storSet(inputKey, {dir:d, ts:Date.now()}).then(r=>{
+            dbg.textContent = 'key: ' + inputKey + ' | last press: ' + d + ' @ ' + new Date().toLocaleTimeString() + ' | write: ' + (r ? 'ok' : 'FAILED');
+          });
           if(navigator.vibrate) navigator.vibrate(20);
         }
         btn.addEventListener('touchstart', (e)=>{ e.preventDefault(); press(); }, {passive:false});
