@@ -349,36 +349,41 @@
 
 <script>
 (function(){
-  // ---------- shared storage helpers ----------
-  let storageBroken = false;
-  let storageErrorMsg = '';
-  async function storSet(key, val){
-    if(typeof window.storage === 'undefined'){
-      storageBroken = true; storageErrorMsg = 'window.storage API ไม่พบในหน้านี้';
-      return null;
-    }
+  // ---------- cross-device sync via ntfy.sh (public pub/sub, works in any browser) ----------
+  let syncBroken = false;
+  let syncErrorMsg = '';
+  function topicIn(session){ return 'snakejoy-in-' + session; }
+  function topicOut(session){ return 'snakejoy-out-' + session; }
+  async function ntfyPublish(topic, body){
     try{
-      const r = await window.storage.set(key, JSON.stringify(val), true);
-      return r;
+      const res = await fetch('https://ntfy.sh/' + topic, { method:'POST', body: body });
+      if(!res.ok){ syncBroken = true; syncErrorMsg = 'publish HTTP ' + res.status; return false; }
+      return true;
     }catch(e){
-      storageBroken = true; storageErrorMsg = 'set failed: ' + (e && e.message ? e.message : e);
-      console.error('storage set failed', e);
-      return null;
+      syncBroken = true; syncErrorMsg = 'publish failed: ' + (e && e.message ? e.message : e);
+      return false;
     }
   }
-  async function storGet(key){
-    if(typeof window.storage === 'undefined'){
-      storageBroken = true; storageErrorMsg = 'window.storage API ไม่พบในหน้านี้';
-      return null;
-    }
+  function ntfySubscribe(topic, onMessage){
+    let es;
     try{
-      const r = await window.storage.get(key, true);
-      if(!r) return null;
-      return JSON.parse(r.value);
+      es = new EventSource('https://ntfy.sh/' + topic + '/sse');
     }catch(e){
-      // "not found" throws too - only flag as broken if it's not a plain not-found
+      syncBroken = true; syncErrorMsg = 'EventSource unsupported: ' + (e && e.message ? e.message : e);
       return null;
     }
+    es.onerror = function(){
+      syncBroken = true; syncErrorMsg = 'sse connection error (retrying)';
+    };
+    es.onopen = function(){
+      syncBroken = false; syncErrorMsg = '';
+    };
+    es.onmessage = function(event){
+      let msg;
+      try{ msg = JSON.parse(event.data); }catch(e){ return; }
+      if(msg.event === 'message') onMessage(msg.message, msg);
+    };
+    return es;
   }
 
   const params = new URLSearchParams(window.location.search);
@@ -441,8 +446,8 @@
       correctLevel: QRCode.CorrectLevel.M
     });
 
-    const inputKey = 'snake:' + session + ':input';
-    const statusKey = 'snake:' + session + ':status';
+    const inTopic = topicIn(session);
+    const outTopic = topicOut(session);
 
     // ---- game state ----
     const COLS = 20, ROWS = 20;
@@ -500,35 +505,25 @@
       ctx.shadowBlur = 0;
     }
 
-    async function pollInput(){
+    function handleControllerMessage(body){
       pollCount++;
-      const data = await storGet(inputKey);
+      lastInputTs = Date.now();
       document.getElementById('debugLine').textContent =
-        'key: ' + inputKey + ' | polls: ' + pollCount + ' | last read: ' + (data ? JSON.stringify(data) : 'null');
-      if(data && data.ts){
-        if(data.ts > lastInputTs){
-          lastInputTs = data.ts;
-          if(!connected){
-            connected = true;
-            document.getElementById('connLed').classList.add('on');
-            document.getElementById('connText').textContent = 'controller connected';
-          }
-          if(data.dir && alive){
-            const nd = data.dir;
-            if(nd === 'up' && dir.y !== 1) pendingDir = {x:0,y:-1};
-            else if(nd === 'down' && dir.y !== -1) pendingDir = {x:0,y:1};
-            else if(nd === 'left' && dir.x !== 1) pendingDir = {x:-1,y:0};
-            else if(nd === 'right' && dir.x !== -1) pendingDir = {x:1,y:0};
-          }
-        }
+        'topic: ' + inTopic + ' | messages received: ' + pollCount + ' | last: ' + body;
+      if(!connected){
+        connected = true;
+        document.getElementById('connLed').classList.add('on');
+        document.getElementById('connText').textContent = 'controller connected';
       }
-      // consider disconnected if no ping for 6s
-      if(connected && Date.now() - lastInputTs > 6000){
-        connected = false;
-        document.getElementById('connLed').classList.remove('on');
-        document.getElementById('connText').textContent = 'controller disconnected';
+      if(alive){
+        const nd = body;
+        if(nd === 'up' && dir.y !== 1) pendingDir = {x:0,y:-1};
+        else if(nd === 'down' && dir.y !== -1) pendingDir = {x:0,y:1};
+        else if(nd === 'left' && dir.x !== 1) pendingDir = {x:-1,y:0};
+        else if(nd === 'right' && dir.x !== -1) pendingDir = {x:1,y:0};
       }
     }
+    ntfySubscribe(inTopic, handleControllerMessage);
     function dirName(d){
       if(d.y===-1) return 'up'; if(d.y===1) return 'down';
       if(d.x===-1) return 'left'; return 'right';
@@ -554,14 +549,14 @@
         snake.pop();
       }
       draw();
-      storSet(statusKey, {score, alive:true, ts:Date.now()});
+      ntfyPublish(outTopic, JSON.stringify({score, alive:true}));
     }
     function endGame(){
       alive = false;
       sfxGameOver();
       document.getElementById('finalScoreText').textContent = 'Score: ' + score;
       document.getElementById('gameoverOverlay').classList.remove('hidden');
-      storSet(statusKey, {score, alive:false, ts:Date.now()});
+      ntfyPublish(outTopic, JSON.stringify({score, alive:false}));
     }
 
     let countdownTimer = null;
@@ -600,16 +595,20 @@
       draw();
     });
 
-    // poll for connection + input constantly
-    setInterval(async ()=>{
-      await pollInput();
+    // watchdog: detect disconnect, trigger countdown once connected
+    setInterval(()=>{
+      if(connected && Date.now() - lastInputTs > 6000){
+        connected = false;
+        document.getElementById('connLed').classList.remove('on');
+        document.getElementById('connText').textContent = 'controller disconnected';
+      }
       if(connected && !started){
         startCountdown();
       }
-      if(storageBroken){
-        document.getElementById('connText').textContent = 'sync error: ' + storageErrorMsg;
+      if(syncBroken){
+        document.getElementById('connText').textContent = 'sync error: ' + syncErrorMsg;
       }
-    }, 200);
+    }, 500);
 
     draw();
   }
@@ -633,46 +632,48 @@
     function connect(sess){
       session = sess.toUpperCase().trim();
       if(session.length < 4) return;
-      const inputKey = 'snake:' + session + ':input';
-      const statusKey = 'snake:' + session + ':status';
+      const inTopic = topicIn(session);
+      const outTopic = topicOut(session);
 
       joinBox.classList.add('hidden');
       dpad.classList.remove('hidden');
       ctrlLed.classList.add('on');
       ctrlLedText.textContent = 'session ' + session;
       const dbg = document.getElementById('ctrlDebug');
-      dbg.textContent = 'key: ' + inputKey;
+      dbg.textContent = 'topic: ' + inTopic;
+
+      let lastDir = 'ping';
 
       // initial ping so host knows we exist
-      storSet(inputKey, {dir:null, ts:Date.now()}).then(r=>{
-        dbg.textContent = 'key: ' + inputKey + ' | initial ping result: ' + (r ? 'ok' : 'FAILED');
+      ntfyPublish(inTopic, 'ping').then(ok=>{
+        dbg.textContent = 'topic: ' + inTopic + ' | initial ping: ' + (ok ? 'ok' : 'FAILED');
       });
 
-      // heartbeat so host doesn't think we disconnected
+      // heartbeat so host doesn't think we disconnected while idle
       setInterval(()=>{
-        storSet(inputKey, {dir:lastDir, ts:Date.now()});
-      }, 2500);
+        ntfyPublish(inTopic, lastDir);
+      }, 3000);
 
-      // poll host status for score
-      setInterval(async ()=>{
-        if(storageBroken){
-          ctrlStatus.textContent = '⚠ ซิงค์ข้อมูลไม่ได้: ' + storageErrorMsg;
-          return;
-        }
-        const st = await storGet(statusKey);
-        if(st){
-          scoreCtrl.textContent = st.score;
-          ctrlStatus.textContent = st.alive ? 'เชื่อมต่อแล้ว บังคับทิศทางได้เลย' : 'จบเกม! รอเริ่มใหม่ที่จอหลัก';
-        }
-      }, 500);
+      // subscribe to host status (score / alive) for live display
+      ntfySubscribe(outTopic, function(body){
+        let st;
+        try{ st = JSON.parse(body); }catch(e){ return; }
+        scoreCtrl.textContent = st.score;
+        ctrlStatus.textContent = st.alive ? 'เชื่อมต่อแล้ว บังคับทิศทางได้เลย' : 'จบเกม! รอเริ่มใหม่ที่จอหลัก';
+      });
 
-      let lastDir = null;
+      setInterval(()=>{
+        if(syncBroken){
+          ctrlStatus.textContent = '⚠ ซิงค์ข้อมูลไม่ได้: ' + syncErrorMsg;
+        }
+      }, 1000);
+
       document.querySelectorAll('.dbtn[data-dir]').forEach(btn=>{
         function press(){
           const d = btn.getAttribute('data-dir');
           lastDir = d;
-          storSet(inputKey, {dir:d, ts:Date.now()}).then(r=>{
-            dbg.textContent = 'key: ' + inputKey + ' | last press: ' + d + ' @ ' + new Date().toLocaleTimeString() + ' | write: ' + (r ? 'ok' : 'FAILED');
+          ntfyPublish(inTopic, d).then(ok=>{
+            dbg.textContent = 'topic: ' + inTopic + ' | last press: ' + d + ' @ ' + new Date().toLocaleTimeString() + ' | send: ' + (ok ? 'ok' : 'FAILED');
           });
           if(navigator.vibrate) navigator.vibrate(20);
         }
