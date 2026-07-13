@@ -431,7 +431,11 @@
     const ctx = canvas.getContext('2d');
     const cell = canvas.width / COLS;
 
-    let snake, dir, pendingDir, food, score, best = 0, alive = false, started = false;
+    let snake = [{x:10,y:10},{x:9,y:10},{x:8,y:10}];
+    let dir = {x:1,y:0};
+    let pendingDir = null;
+    let food = {x:15,y:10};
+    let score = 0, best = 0, alive = false, started = false;
     let lastInputTs = 0;
     let connected = false;
 
